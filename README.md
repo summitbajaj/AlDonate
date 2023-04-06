@@ -27,3 +27,7 @@ To start the application, run command below in terminal.
 python3 donate.py
 python3 transfer.py
 ```
+
+## Prototype Details
+* [AlDonate WebApp UI](https://www.figma.com/file/HEQNhaxIbSRgX0Irysb079/AlDonate-Mock-Up-page?node-id=0%3A1&t=9AEY11fFsMeO0FvC-1)
+* [Pitch Deck](https://entuedu.sharepoint.com/:p:/r/teams/DeepView/Shared%20Documents/General/BlockBash.pptx?d=w79469c4953e6429a9dff2fdbb201fb7c&csf=1&web=1&e=sg9dJV)
