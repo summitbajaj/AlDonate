@@ -24,5 +24,6 @@ https://github.com/summitbajaj/AlDonate.git
 ### Start Application
 To start the application, run command below in terminal.
 ```
-python3 Authorize.py
+python3 donate.py
+python3 transfer.py
 ```
