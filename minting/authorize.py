@@ -4,9 +4,13 @@ from algosdk import mnemonic, transaction, account
 from algosdk.v2client import algod
 from pyteal import *
 
-# example: LSIG_SIMPLE_ESCROW
+
 def donation_escrow(benefactor):
-    Fee = Int(1000)
+
+    # Getting AppID
+    AppID = AppParamObject
+    # Getting Minimum Allowed Fee
+    Fee = Global.min_txn_fee()
 
     program = And(
         Global.group_size() == Int(1),
@@ -19,7 +23,10 @@ def donation_escrow(benefactor):
             ),
             And(
                 Txn.type_enum() == TxnType.AssetConfig,
-
+                Txn.config_asset_total()==Int(1),
+                Txn.config_asset_unit_name()==Bytes("Don")
+                # ensure nft is the logo of the charity
+                # Txn.config_asset_url()
             ),
             And(
                 Txn.type_enum() == TxnType.AssetTransfer,
@@ -33,17 +40,6 @@ def donation_escrow(benefactor):
 
     return compileTeal(program, Mode.Signature, version=5)
 
-
-# # example: LSIG_SIMPLE_ESCROW
-
-# # example: LSIG_SIMPLE_ESCROW_INIT
-# charity_addr = "E7KMYV5NKFHLT2XKSBMPMD7LQ5OJEBV7CMPPQBWBK4JHSXZTLWODL2XACU"
-# teal_program = donation_escrow(charity_addr)
-# # example: LSIG_SIMPLE_ESCROW_INIT
-
-# # Output the TEAL program to a file
-# with open("test.teal", "w") as f:
-#     f.write(teal_program)
 
 # user declared account mnemonics
 benefactor_mnemonic = "visit tiger car apple produce kingdom next wrap drum clean review rifle laugh tube sausage target cave gold already tissue comfort dove cart absorb twice"
@@ -110,6 +106,77 @@ def mint_nft(encoded_program: str, algod_client: algod.AlgodClient):
 
     return pmtx
 
+# perform opt in transaction for minted NFT
+def opt_in_nft(
+    encoded_program: str, asset_id : int, algod_client: algod.AlgodClient,receiver_mnemonic: str
+):
+    sp = algod_client.suggested_params()
+    receiver_pk = mnemonic.to_private_key(receiver_mnemonic)
+    receiver_address = account.address_from_private_key(receiver_pk)
+    optin_txn = transaction.AssetOptInTxn(
+        sender=receiver_address, sp=sp, index=asset_id
+    )
+    signed_optin_txn = optin_txn.sign(receiver_pk)
+    txid = algod_client.send_transaction(signed_optin_txn)
+    print(f"Sent opt in transaction with txid: {txid}")
+
+    # Wait for the transaction to be confirmed
+    results = transaction.wait_for_confirmation(algod_client, txid, 4)
+    print(f"Result confirmed in round: {results['confirmed-round']}")
+
+def transfer_nft_to_donor(
+    encoded_program: str, asset_id : int, algod_client: algod.AlgodClient,receiver_mnemonic: str
+):
+    receiver_pk = mnemonic.to_private_key(receiver_mnemonic)
+    receiver_address = account.address_from_private_key(receiver_pk)
+    opt_in_nft(encoded_program,asset_id,algod_client,receiver_mnemonic)
+
+    # Create an lsig object using the compiled, b64 encoded program
+    program = base64.b64decode(encoded_program)
+    lsig = transaction.LogicSigAccount(program)
+
+    # Transfer the newly created NFT from escrow to donor
+    txn = transaction.AssetTransferTxn(
+        sender=lsig.address(),
+        sp=algod_client.suggested_params(),
+        receiver=receiver_address,
+        amt=1,
+        index=asset_id,
+    )
+    stxn = transaction.LogicSigTransaction(txn, lsig)
+    txid = algod_client.send_transaction(stxn)
+
+    print(f"Sent asset transfer transaction with txid: {txid}")
+    # Wait for the transaction to be confirmed
+    results = transaction.wait_for_confirmation(algod_client, txid, 4)
+    print(f"Result confirmed in round: {results['confirmed-round']}")
+
+
+def freeze_donor_nft(
+    encoded_program: str, asset_id : int, algod_client: algod.AlgodClient,receiver_mnemonic: str
+):
+    receiver_pk = mnemonic.to_private_key(receiver_mnemonic)
+    receiver_address = account.address_from_private_key(receiver_pk)
+
+     # Create an lsig object using the compiled, b64 encoded program
+    program = base64.b64decode(encoded_program)
+    lsig = transaction.LogicSigAccount(program)
+
+    # Create freeze transaction to freeze the asset in acct2 balance
+    freeze_txn = transaction.AssetFreezeTxn(
+        sender=lsig.address(),
+        sp=algod_client.suggested_params(),
+        target=receiver_address,
+        index=asset_id,
+        new_freeze_state=True,
+    )
+
+    stxn = transaction.LogicSigTransaction(freeze_txn, lsig)
+    txid = algod_client.send_transaction(stxn)
+    results = transaction.wait_for_confirmation(algod_client, txid, 4)
+    print(f"Sent freeze transaction with txid: {txid}")
+    print(f"Result confirmed in round: {results['confirmed-round']}")
+    
 
 def lsig_payment_txn(
     encoded_program: str, amt: int, rcv: str, algod_client: algod.AlgodClient
@@ -151,11 +218,9 @@ def main():
     # Activate escrow contract by sending 2 algo and 1000 microalgo for transaction fee from creator
     amt = 100000
     payment_transaction(sender_mnemonic, amt, escrow_address, algod_client)
-
-
-    print("Minting NFT......")
-
+    
     # Mint NFT using the escrow address
+    print("Minting NFT......")
     pmtx = mint_nft(escrow_result,algod_client)
     created_asset = pmtx["asset-index"]
 
@@ -166,55 +231,9 @@ def main():
     withdrawal_amt = 10000
     lsig_payment_txn(escrow_result, withdrawal_amt, receiver_public_key, algod_client)
 
-
-    sp = algod_client.suggested_params()
-    # Create opt-in transaction
-    # asset transfer from me to me for asset id we want to opt-in to with amt==0
-    optin_txn = transaction.AssetOptInTxn(
-        sender=receiver_public_key, sp=sp, index=created_asset
-    )
-    signed_optin_txn = optin_txn.sign(private_key)
-    txid = algod_client.send_transaction(signed_optin_txn)
-    print(f"Sent opt in transaction with txid: {txid}")
-
-    # Wait for the transaction to be confirmed
-    results = transaction.wait_for_confirmation(algod_client, txid, 4)
-    print(f"Result confirmed in round: {results['confirmed-round']}")
-
-    # Transfer the newly created NFT from acct2 to acct1
-    txn = transaction.AssetTransferTxn(
-        sender=escrow_address,
-        sp=algod_client.suggested_params(),
-        receiver=receiver_public_key,
-        amt=1,
-        index=created_asset,
-    )
-
-    program = base64.b64decode(escrow_result)
-    lsig = transaction.LogicSigAccount(program)
-    stxn = transaction.LogicSigTransaction(txn, lsig)
-    txid = algod_client.send_transaction(stxn)
-
-    print(f"Sent asset transfer transaction with txid: {txid}")
-    # Wait for the transaction to be confirmed
-    results = transaction.wait_for_confirmation(algod_client, txid, 4)
-    print(f"Result confirmed in round: {results['confirmed-round']}")
-
-    # Create freeze transaction to freeze the asset in acct2 balance
-    freeze_txn = transaction.AssetFreezeTxn(
-        sender=escrow_address,
-        sp=algod_client.suggested_params(),
-        target=receiver_public_key,
-        index=created_asset,
-        new_freeze_state=True,
-    )
-
-    stxn = transaction.LogicSigTransaction(freeze_txn, lsig)
-    txid = algod_client.send_transaction(stxn)
-    print(f"Sent freeze transaction with txid: {txid}")
-
-    results = transaction.wait_for_confirmation(algod_client, txid, 4)
-    print(f"Result confirmed in round: {results['confirmed-round']}")
+    transfer_nft_to_donor(escrow_result,created_asset,algod_client,sender_mnemonic)
+    freeze_donor_nft(escrow_result,created_asset,algod_client,sender_mnemonic)
+   
 
 
 
